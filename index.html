@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symbiotic Protocol - Community Feedback</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+    <link rel="icon" type="image/png" href="Symbiotic-Logo.png">
+    <link rel="shortcut icon" type="image/png" href="Symbiotic-Logo.png">
+    <link rel="apple-touch-icon" href="Symbiotic-Logo.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000000;
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Animated background elements */
+        .bg-shapes {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 0;
+        }
+
+        .shape {
+            position: absolute;
+            background: radial-gradient(circle, rgba(192, 253, 92, 0.15) 0%, transparent 70%);
+            border-radius: 50%;
+            animation: float 20s infinite ease-in-out;
+        }
+
+        .shape:nth-child(1) {
+            width: 400px;
+            height: 400px;
+            top: -200px;
+            left: -200px;
+            animation-delay: 0s;
+        }
+
+        .shape:nth-child(2) {
+            width: 300px;
+            height: 300px;
+            bottom: -150px;
+            right: -150px;
+            animation-delay: 7s;
+        }
+
+        .shape:nth-child(3) {
+            width: 250px;
+            height: 250px;
+            top: 50%;
+            right: 10%;
+            animation-delay: 14s;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+            }
+            33% {
+                transform: translate(30px, -30px) scale(1.1);
+            }
+            66% {
+                transform: translate(-20px, 20px) scale(0.9);
+            }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(192, 253, 92, 0.2);
+            border-radius: 24px;
+            padding: 48px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .logo-container {
+            margin-bottom: 20px;
+        }
+
+        .logo {
+            max-width: 70px; 
+            height: auto;
+            display: inline-block;
+            border-radius: 11px; 
+        }
+
+        .logo-text {
+            font-family: 'Space Grotesk', 'Inter', sans-serif;
+            font-size: 32px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #C0FD5C 0%, #ffffff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 12px;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 16px;
+            line-height: 1.6;
+            font-weight: 400;
+        }
+
+        .anonymous-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(192, 253, 92, 0.1);
+            border: 1px solid rgba(192, 253, 92, 0.3);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            color: #C0FD5C;
+            margin-top: 16px;
+            font-weight: 500;
+        }
+
+        .community-note {
+            text-align: center;
+            margin-top: 12px;
+            padding: 12px;
+            background: rgba(192, 253, 92, 0.05);
+            border-radius: 12px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.6);
+            font-weight: 400;
+        }
+
+        .form-group {
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+            color: #C0FD5C;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        select, textarea {
+            width: 100%;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(192, 253, 92, 0.2);
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            transition: all 0.3s ease;
+        }
+
+        select:focus, textarea:focus {
+            outline: none;
+            border-color: #C0FD5C;
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(192, 253, 92, 0.1);
+        }
+
+        select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L6 6L11 1' stroke='%23C0FD5C' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 16px center;
+            padding-right: 48px;
+        }
+
+        select option {
+            background: #1a1a1a;
+            color: #ffffff;
+        }
+
+        textarea {
+            min-height: 160px;
+            resize: vertical;
+            line-height: 1.6;
+        }
+
+        textarea::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 18px;
+            background: #C0FD5C;
+            color: #000000;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .submit-btn:hover {
+            background: #d4ff7a;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(192, 253, 92, 0.3);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .success-message {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            background: rgba(192, 253, 92, 0.1);
+            border: 1px solid rgba(192, 253, 92, 0.3);
+            border-radius: 12px;
+            margin-top: 20px;
+            color: #C0FD5C;
+            font-weight: 500;
+        }
+
+        .success-message.show {
+            display: block;
+            animation: slideIn 0.5s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .footer-note {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 400;
+        }
+        .creator-link {
+            color: #C0FD5C;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .creator-link:hover {
+            color: #d4ff7a;
+            text-decoration: underline;
+        }
+
+        @media (max-width: 640px) {
+            .glass-card {
+                padding: 32px 24px;
+            }
+
+            .logo-text {
+                font-size: 28px;
+            }
+
+            .logo {
+                max-width: 70px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-shapes">
+        <div class="shape"></div>
+        <div class="shape"></div>
+        <div class="shape"></div>
+    </div>
+
+    <div class="container">
+        <div class="glass-card">
+            <div class="header">
+                <div class="logo-container">
+                    <img src="Symbiotic-Logo.png" alt="Symbiotic Protocol" class="logo" onerror="this.style.display='none'; document.querySelector('.logo-text').style.display='block';">
+                    <h1 class="logo-text" style="display: none;">Symbiotic Protocol</h1>
+                </div>
+                <p class="subtitle">Share your thoughts and help improve the Symbiotic ecosystem through anonymous community feedback.</p>
+                <div class="anonymous-badge">
+                    🔒 Completely Anonymous
+                </div>
+                <div class="community-note">
+                    Community-driven initiative • Not officially affiliated
+                </div>
+            </div>
+
+            <form id="feedbackForm">
+                <div class="form-group">
+                    <label for="feedbackType">Feedback Type</label>
+                    <select id="feedbackType" name="feedbackType" required>
+                        <option value="">Select a category...</option>
+                        <option value="Suggestion">Suggestion</option>
+                        <option value="Bug Report">Bug Report</option>
+                        <option value="Feature Request">Feature Request</option>
+                        <option value="General Feedback">General Feedback</option>
+                        <option value="Security Concern">Security Concern</option>
+                        <option value="User Experience">User Experience</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="feedback">Your Feedback</label>
+                    <textarea 
+                        id="feedback" 
+                        name="feedback" 
+                        placeholder="Share your thoughts, ideas, or concerns about Symbiotic Protocol..." 
+                        required
+                    ></textarea>
+                </div>
+
+                <button type="submit" class="submit-btn" id="submitBtn">
+                    Submit Feedback
+                </button>
+
+                <div id="successMessage" class="success-message">
+                    ✓ Thank you! Your feedback has been submitted successfully.
+                </div>
+
+                <p class="footer-note">
+                    Your submission is completely anonymous. No personal information is collected.
+                </p>
+                <p class="footer-note" style="margin-top: 12px;">
+                    Made with ❤️ by <a href="https://x.com/moulderofweb3" target="_blank" rel="noopener noreferrer" class="creator-link">rex</a>
+                </p>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const GOOGLE_FORM_ACTION = 'https://docs.google.com/forms/d/e/1FAIpQLSc8n-DrS0TCniwrwdFFBSR5KsiwAX-Y8uLco7yzMus8KZvLEA/formResponse';
+        const FEEDBACK_TYPE_ENTRY = 'entry.645776150';
+        const FEEDBACK_ENTRY = 'entry.311036435';
+
+        const form = document.getElementById('feedbackForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const successMessage = document.getElementById('successMessage');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const feedbackType = document.getElementById('feedbackType').value;
+            const feedback = document.getElementById('feedback').value;
+
+            if (!feedbackType || !feedback) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting...';
+
+            // Create form data for Google Forms
+            const formData = new FormData();
+            formData.append(FEEDBACK_TYPE_ENTRY, feedbackType);
+            formData.append(FEEDBACK_ENTRY, feedback);
+
+            try {
+                // Submit to Google Forms
+                // Using no-cors mode to avoid CORS issues (we won't get response data, but submission works)
+                await fetch(GOOGLE_FORM_ACTION, {
+                    method: 'POST',
+                    body: formData,
+                    mode: 'no-cors'
+                });
+
+                // Show success message
+                successMessage.classList.add('show');
+                form.reset();
+
+                // Reset button after delay
+                setTimeout(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit Feedback';
+                    successMessage.classList.remove('show');
+                }, 3000);
+
+            } catch (error) {
+                alert('There was an error submitting your feedback. Please try again.');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit Feedback';
+            }
+        });
+    </script>
+</body>
+</html>
