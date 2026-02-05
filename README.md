@@ -1,423 +1,633 @@
-# Portfolio Submission & Review System
+# Portfolio Submission & Review Flow - Complete Documentation
 
-This document explains the complete flow of the portfolio submission, review, voting, and promotion system.
+## Overview
+
+This document explains the complete flow from when a user submits their portfolio until they receive a Discord role promotion.
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Website   │───▶│   Backend   │───▶│   Discord   │───▶│  Parliament │───▶│    Role     │
+│   Submit    │    │   Review    │    │   Embed     │    │   Voting    │    │  Assigned   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+```
 
 ---
 
-## 🔄 Complete Flow Overview
+## Stage 1: User Submits Portfolio on Website
+
+### What User Sees
+
+When user clicks "Submit for Review" on `/portfolio` page:
+
+1. **Optimistic UI Update** - Status immediately changes to "UNDER REVIEW"
+2. **Success Message** - "Portfolio submitted for review!"
+3. **Dashboard View** - Shows submission status with ⏳ icon
+
+### Code Flow
+
+**File:** `web/src/app/portfolio/page.tsx`
+
+```typescript
+const handleSubmitPortfolio = async () => {
+  setSubmitting(true);
+  
+  // Optimistic UI update
+  setDashboard({
+    ...dashboard,
+    portfolio: { ...dashboard.portfolio, status: 'submitted' }
+  });
+  
+  // POST to API
+  const res = await fetch('/api/portfolio/submit', { method: 'POST' });
+  const data = await res.json();
+  
+  if (!data.success) {
+    // Revert on failure
+    fetchDashboard();
+  }
+};
+```
+
+### API Call Chain
 
 ```
-User Creates Portfolio → Submits for Review → Curator Reviews → Parliament Votes → Auto-Promotion
-     (Draft)                (Submitted)         (Pending Vote)       (Approved/Rejected)
+Frontend                     Next.js API Route                    FastAPI Backend
+───────────────────────────────────────────────────────────────────────────────────
+POST /api/portfolio/submit → /api/portfolio/submit/route.ts → POST /api/portfolio/submit
+                             (adds discord_id from session)      (updates DB status)
 ```
 
----
+### Backend Processing
 
-## 1️⃣ User Creates & Submits Portfolio
+**File:** `backend/src/api/routers/portfolio.py`
 
-### Frontend: [Portfolio.jsx](liquidweb/src/pages/Portfolio.jsx)
-
-**Location:** `/portfolio` page
-
-**User Actions:**
-1. Select target guild role
-2. Add Twitter username
-3. Add tweet URLs (stored as available tweets)
-4. Add other works (optional links)
-5. Add proof of use/Notion URL (optional)
-6. Click "Submit Portfolio for Review"
-
-**Submit Handler:** [`handleSubmitPortfolio()`](liquidweb/src/pages/Portfolio.jsx#L312)
-
-**Flow:**
-```javascript
-1. Validate required fields (twitter_username, at least 1 tweet)
-2. Show confirmation: "Submit for review? You won't be able to edit..."
-3. Call: POST /api/portfolio/save (save draft with all data)
-4. Call: POST /api/portfolio/submit { discord_id }
-5. Redirect to: /portfolios/{discord_id}
-```
-
-### Backend: [portfolio.py](backend/src/api/routers/portfolio.py#L244)
-
-**Endpoint:** `POST /api/portfolio/submit`
-
-**Process:**
 ```python
-1. Find portfolio with status: draft, submitted, or rejected
-2. Validate twitter_handle is present
-3. Update portfolio:
-   - status = "submitted"
-   - submitted_at = now()
-4. Commit to database
-5. Return portfolio data
+@router.post("/submit")
+async def submit_portfolio(request: PortfolioSubmitRequest, session_maker):
+    # 1. Find portfolio in DB
+    portfolio = await session.execute(
+        select(Portfolio).where(Portfolio.user_id == int(request.discord_id))
+    )
+    
+    # 2. Validate status transitions
+    if portfolio.status == "submitted":
+        return {"success": False, "message": "Already submitted"}
+    
+    # 3. Check cooldown for rejected portfolios (7 days)
+    if portfolio.status == "rejected" and portfolio.rejected_at:
+        cooldown_end = portfolio.rejected_at + timedelta(days=7)
+        if datetime.utcnow() < cooldown_end:
+            return {"success": False, "message": "Cooldown active"}
+    
+    # 4. Update status
+    portfolio.status = "submitted"
+    portfolio.submitted_at = datetime.utcnow()
+    await session.commit()
+    
+    return {"success": True, "status": "submitted"}
 ```
 
-**Database Status:** `SUBMITTED`
+### Database Changes
+
+```sql
+UPDATE portfolios 
+SET status = 'submitted', 
+    submitted_at = NOW() 
+WHERE user_id = {discord_id};
+```
 
 ---
 
-## 2️⃣ Curator/Staff Reviews Portfolio
+## Stage 2: Guild Leader Reviews on Website
 
-### Frontend: [Portfolios.jsx](liquidweb/src/pages/Portfolios.jsx)
+### What Guild Leader Sees
 
-**Location:** `/portfolios` page (Review dashboard)
+On `/portfolios` page:
 
-**Who Can Review:**
-- Guild Leader (role: 1449066131741737175)
-- Parliament (role: 1447972806339067925)
-- Staff (role: 1436799852171235472)
-- Automata (role: 1436233268134678600)
-- Moderator (role: 1436217207825629277)
+1. **Portfolio List** - Grid of all portfolios with status badges
+2. **Filter Buttons** - All / Submitted / Draft
+3. **Portfolio Modal** - Click to view full details
+4. **Review Buttons** - "Approve" and "Reject" (only for Leads)
 
-**Review Actions:**
-1. **Approve** → Sends to Parliament for voting
-2. **Reject** → Portfolio rejected with reason
-3. **Request Changes** → Back to draft with feedback
+### Permission Check
 
-**Review Handler:** `handleReview()` in [Portfolios.jsx](liquidweb/src/pages/Portfolios.jsx)
+**File:** `web/src/app/api/portfolio/review/route.ts`
 
-### Backend: [portfolio.py](backend/src/api/routers/portfolio.py#L275)
-
-**Endpoint:** `POST /api/portfolio/review`
-
-**Request:**
-```json
-{
-  "discord_id": "123456789",
-  "reviewer_id": "987654321",
-  "action": "approve|reject|request_changes",
-  "feedback": "Optional feedback text"
+```typescript
+// Check if user has Lead role in Discord
+async function checkIsLead(accessToken: string): Promise<boolean> {
+  const memberResponse = await fetch(
+    `https://discord.com/api/v10/users/@me/guilds/${DISCORD_GUILD_ID}/member`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  
+  const memberData = await memberResponse.json();
+  const userRoles: string[] = memberData.roles || [];
+  
+  // LEAD_ROLE_IDS from environment
+  return LEAD_ROLE_IDS.some(leadRoleId => userRoles.includes(leadRoleId));
 }
 ```
 
-**Process for APPROVE:**
-```python
-1. Find portfolio with status = "submitted"
-2. Set portfolio.status = "pending_vote"
-3. Set portfolio.reviewer_id = reviewer's Discord ID
-4. Set portfolio.reviewed_at = now()
-5. Set portfolio.review_feedback = feedback
-6. Calculate voting_deadline = now() + 24 hours
-7. Create Discord embed with voting info
-8. Send to Parliament channel with voting buttons
-9. Return { success: true, discord_message_id }
+### Approve Button Click
+
+**File:** `web/src/app/portfolios/page.tsx`
+
+```typescript
+const handleReview = async (action: 'approve' | 'reject') => {
+  setReviewing(true);
+  
+  const res = await fetch('/api/portfolio/review', {
+    method: 'POST',
+    body: JSON.stringify({
+      portfolioUserId: selectedPortfolio.user_id,
+      action,  // 'approve' or 'reject'
+    }),
+  });
+  
+  const data = await res.json();
+  
+  if (data.success) {
+    setReviewMessage({
+      type: 'success',
+      text: action === 'approve' 
+        ? 'Portfolio sent to Parliament for voting!' 
+        : 'Portfolio rejected successfully',
+    });
+  }
+};
 ```
 
-**Discord Embed Structure:**
-```javascript
-{
-  title: "voting",
-  description: "@reviewer approved this portfolio for @Parliament voting.\n⏰ deadline: <in 24h>",
-  fields: [
-    { name: "user", value: "@user_mention" },
-    { name: "target guild", value: "@guild_role or name" },
-    { name: "portfolio", value: "[view portfolio](url)" }
-  ],
-  footer: "portfolio id: X • voting ends in 24h or when all parliament members vote"
+### API Call Chain
+
+```
+Frontend                     Next.js API Route                    FastAPI Backend
+───────────────────────────────────────────────────────────────────────────────────
+POST /api/portfolio/review → /api/portfolio/review/route.ts → POST /api/portfolio/review
+Body: {                      1. Checks Lead role via Discord      1. Updates status
+  portfolioUserId,           2. Adds reviewer_id, reviewer_name   2. Creates embed
+  action: 'approve'          3. Forwards to backend               3. Sends to Discord
 }
 ```
 
-**Voting Buttons:**
-- ✅ Approve (green) - Shows vote count
-- ❌ Reject (red) - Shows vote count
-- 🗑️ Withdraw (gray) - Portfolio owner can withdraw
-
-**Database Status:** `PENDING_VOTE`
-
-**Process for REJECT:**
-```python
-1. Set portfolio.status = "rejected"
-2. Set portfolio.rejection_reason = feedback
-3. User has 7-day cooldown before resubmit
-```
-
-**Process for REQUEST_CHANGES:**
-```python
-1. Set portfolio.status = "draft"
-2. Set portfolio.review_feedback = feedback
-3. User can edit and resubmit immediately
-```
-
 ---
 
-## 3️⃣ Parliament Votes on Portfolio
+## Stage 3: Backend Sends to Discord
 
-### Discord Bot: [parliament_command.py](src/bot/commands/parliament_command.py#L578)
+### Backend Review Handler
 
-**Who Can Vote:**
-- Parliament role members (1447972806339067925)
-- Server administrators
-
-**Vote Buttons:**
-- Custom IDs: `portfolio_vote_approve_{discord_id}`, `portfolio_vote_reject_{discord_id}`
-- Listener: `portfolio_vote_listener()` on `on_interaction` event
-
-**Vote Handler:** `handle_portfolio_vote()`
-
-**Flow:**
-```python
-1. Check user has Parliament role
-2. Record vote: POST /api/portfolio/vote
-   - discord_id
-   - voter_discord_id
-   - vote_type (approve/reject)
-3. Update button labels with new vote counts
-4. Check if voting is complete: GET /api/portfolio/vote-check/{discord_id}
-5. If ready, finalize: POST /api/portfolio/finalize
-```
-
-### Backend Vote Recording: [portfolio.py](backend/src/api/routers/portfolio.py)
-
-**Endpoint:** `POST /api/portfolio/vote`
-
-**Process:**
-```python
-1. Find portfolio with status = "pending_vote"
-2. Check if user already voted (prevent duplicate votes)
-3. Create PortfolioVote record:
-   - portfolio_id
-   - voter_discord_id
-   - vote_type (approve/reject)
-4. Return current vote counts
-```
-
-**Vote Check Logic:**
-```python
-- Get total Parliament member count
-- Count unique voters
-- If all voted OR 24h deadline passed:
-  - approved = (approve_count > reject_count)
-  - return { ready: true, approved: true/false }
-```
-
----
-
-## 4️⃣ Finalize Portfolio (Auto-Promotion)
-
-### Backend: [portfolio.py](backend/src/api/routers/portfolio.py)
-
-**Endpoint:** `POST /api/portfolio/finalize`
-
-**Process for APPROVED:**
-```python
-1. Set portfolio.status = "approved"
-2. Get user's current guild membership
-3. Calculate next tier role from roles.yaml
-4. Update guild member tier in database
-5. Create portfolio history record
-6. Return { success: true, to_role: "role_name" }
-```
-
-### Discord Bot Auto-Role Assignment:
-
-**In parliament_command.py:**
-```python
-1. Get member object from Discord
-2. Get next tier role from roles.yaml config
-3. Assign role: member.add_roles(role)
-4. Update Discord embed:
-   - Color: Green
-   - Title: "✅ Portfolio Approved"
-   - Add field: "🎖️ Promotion - @user promoted to RoleName (Tier X)!"
-5. Disable voting buttons
-```
-
-**Process for REJECTED:**
-```python
-1. Set portfolio.status = "rejected"
-2. Set rejection_reason based on vote
-3. Apply 7-day resubmit cooldown
-4. Update Discord embed to red with rejection message
-```
-
----
-
-## 📊 Portfolio Status Lifecycle
-
-```mermaid
-graph TD
-    A[DRAFT] -->|User Submits| B[SUBMITTED]
-    B -->|Curator Approves| C[PENDING_VOTE]
-    B -->|Curator Rejects| D[REJECTED]
-    B -->|Request Changes| A
-    C -->|Parliament Approves| E[APPROVED]
-    C -->|Parliament Rejects| D
-    E -->|Auto-Promotion| F[PROMOTED]
-    D -->|After 7 days| A
-```
-
----
-
-## 🗄️ Database Models
-
-### Portfolio Table ([portfolio.py](backend/src/models/portfolio.py))
+**File:** `backend/src/api/routers/portfolio.py`
 
 ```python
-class Portfolio:
-    id: int
-    user_id: int
-    discord_id: str
+@router.post("/review")
+async def review_portfolio(request: PortfolioReviewRequest, session_maker, messages_repo):
+    # 1. Get portfolio from DB
+    portfolio = await session.execute(
+        select(Portfolio).where(Portfolio.user_id == int(request.portfolio_user_id))
+    )
     
-    # Content
-    notion_url: str | None
-    bio: str | None
-    twitter_handle: str | None
-    achievements: str | None
-    other_works: str | None  # JSON array
+    # 2. Validate status
+    if portfolio.status != "submitted":
+        return {"success": False, "message": "Not in submitted status"}
     
-    # Target
-    target_role: str | None
-    current_role: str | None
+    # 3. Get user stats from messages.db
+    stats = messages_repo.get_user_stats(int(request.portfolio_user_id))
+    username = stats.get("username")
+    message_count = stats.get("message_count", 0)
+    days_active = stats.get("days_active", 0)
+    tweets = messages_repo.get_user_tweets(int(request.portfolio_user_id))
+    tweet_count = len(tweets)
     
-    # Status
-    status: str  # draft, submitted, pending_vote, approved, rejected, promoted
+    # 4. Get portfolio data
+    portfolio_data = portfolio.ai_report or {}
+    guild = portfolio_data.get("guild", "Unknown")
+    twitter = portfolio_data.get("twitter_username", "")
+    top_content = portfolio_data.get("top_content", "")
+    unique_qualities = portfolio_data.get("unique_qualities", "")
+    why_promotion = portfolio_data.get("why_promotion", "")
+    current_role = portfolio.current_role or "Droplet"
     
-    # Review
-    reviewer_id: str | None
-    review_feedback: str | None
-    rejection_reason: str | None
-    
-    # Timestamps
-    created_at: datetime
-    updated_at: datetime
-    submitted_at: datetime | None
-    reviewed_at: datetime | None
-    voting_deadline: datetime | None
-    
-    # Relationships
-    tweets: List[PortfolioTweet]
-    history: List[PortfolioHistory]
-    votes: List[PortfolioVote]
+    if request.action == "approve":
+        # 5. Update status to pending_vote
+        portfolio.status = "pending_vote"
+        await session.commit()
+        
+        # 6. Create Discord embed
+        embed = {
+            "title": f"🗳️ Portfolio Vote: {username}",
+            "description": f"**{request.reviewer_name}** approved for parliament voting.",
+            "color": 0x00D4AA,
+            "fields": [
+                {"name": "👤 User", "value": f"<@{request.portfolio_user_id}>", "inline": True},
+                {"name": "🎭 Guild", "value": guild, "inline": True},
+                {"name": "🎖️ Current Role", "value": current_role, "inline": True},
+                {"name": "💬 Messages", "value": str(message_count), "inline": True},
+                {"name": "📅 Days Active", "value": str(days_active), "inline": True},
+                {"name": "🐦 Tweets", "value": str(tweet_count), "inline": True},
+                {"name": "🏆 Top Content", "value": top_content[:200], "inline": False},
+                {"name": "✨ What Makes Them Unique", "value": unique_qualities[:200], "inline": False},
+                {"name": "🎯 Why They Deserve Promotion", "value": why_promotion[:200], "inline": False},
+            ],
+            "footer": {"text": "Click to vote • Each member can only vote once"},
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # 7. Create voting buttons
+        components = [
+            {
+                "type": 1,  # Action Row
+                "components": [
+                    {
+                        "type": 2,  # Button
+                        "style": 3,  # Green
+                        "label": "Approve",
+                        "emoji": {"name": "✅"},
+                        "custom_id": f"vote_approve_{request.portfolio_user_id}"
+                    },
+                    {
+                        "type": 2,  # Button
+                        "style": 4,  # Red
+                        "label": "Reject",
+                        "emoji": {"name": "❌"},
+                        "custom_id": f"vote_reject_{request.portfolio_user_id}"
+                    }
+                ]
+            }
+        ]
+        
+        # 8. Send to Discord
+        message_id = await send_discord_message_with_buttons(
+            NOMINATION_CHANNEL_ID, 
+            embed=embed, 
+            components=components
+        )
+        
+        # 9. Store message ID for later deletion
+        portfolio.discord_message_id = int(message_id)
+        await session.commit()
 ```
 
-### PortfolioVote Table
+### Discord API Call
+
+**File:** `backend/src/api/routers/portfolio.py`
 
 ```python
-class PortfolioVote:
-    id: int
-    portfolio_id: int
-    voter_discord_id: str
-    vote_type: str  # "approve" or "reject"
-    created_at: datetime
+async def send_discord_message_with_buttons(channel_id: str, embed: dict, components: list):
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers={
+                "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "embeds": [embed],
+                "components": components
+            }
+        )
+        
+        if response.status_code == 200:
+            return response.json().get("id")  # Message ID
 ```
 
-### PortfolioHistory Table
+### Embed Structure in Discord
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 🗳️ Portfolio Vote: Username                                    │
+├─────────────────────────────────────────────────────────────────┤
+│ **GuildLeadName** has approved this portfolio for voting.      │
+├─────────────────────────────────────────────────────────────────┤
+│ 👤 User          │ 🎭 Guild      │ 🎖️ Current Role             │
+│ @Username        │ helpers       │ Droplet                     │
+├─────────────────────────────────────────────────────────────────┤
+│ 💬 Messages      │ 📅 Days Active │ 🐦 Tweets                  │
+│ 1,234            │ 45             │ 12                         │
+├─────────────────────────────────────────────────────────────────┤
+│ 🏆 Top Content Highlights                                       │
+│ https://x.com/user/status/123...                                │
+├─────────────────────────────────────────────────────────────────┤
+│ ✨ What Makes Them Unique                                       │
+│ Active community helper, always welcoming newcomers...          │
+├─────────────────────────────────────────────────────────────────┤
+│ 🎯 Why They Deserve Promotion                                   │
+│ Consistent contributions over 3 months...                       │
+├─────────────────────────────────────────────────────────────────┤
+│ Click a button to vote • Each member can only vote once         │
+├─────────────────────────────────────────────────────────────────┤
+│  [✅ Approve]  [❌ Reject]                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Stage 4: Parliament Voting in Discord
+
+### Vote Button Handler
+
+**File:** `src/bot/commands/parliament.py`
 
 ```python
-class PortfolioHistory:
-    id: int
-    portfolio_id: int
-    discord_id: str
-    from_role: str
-    to_role: str
-    snapshot_data: str  # JSON
-    promoted_at: datetime
+class ParliamentVoteView(discord.ui.View):
+    def __init__(self, cog: 'ParliamentCog'):
+        super().__init__(timeout=None)  # Persistent view
+        self.cog = cog
+    
+    @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.green, custom_id="parliament_vote_yes")
+    async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_vote(interaction, "yes")
+    
+    @discord.ui.button(label="❌ Reject", style=discord.ButtonStyle.red, custom_id="parliament_vote_no")
+    async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_vote(interaction, "no")
+```
+
+### Vote Processing
+
+```python
+async def _handle_vote(self, interaction: discord.Interaction, vote_type: str):
+    embed = interaction.message.embeds[0]
+    
+    # 1. Extract user ID from embed
+    for field in embed.fields:
+        if field.name == "👤 Candidate":
+            portfolio_user_id = field.value.split("<@")[1].split(">")[0]
+    
+    # 2. Get current vote count from embed
+    for field in embed.fields:
+        if field.name in ["📊 Current Vote", "📊 Final Vote"]:
+            parts = field.value.split("/")
+            votes_yes = int(parts[0].replace("✅", "").strip())
+            votes_no = int(parts[1].replace("❌", "").strip())
+    
+    # 3. Increment vote
+    if vote_type == "yes":
+        votes_yes += 1
+    else:
+        votes_no += 1
+    
+    # 4. Update embed
+    embed.set_field_at(vote_field_index, 
+        name="📊 Current Vote",
+        value=f"✅ {votes_yes} / ❌ {votes_no}"
+    )
+    await interaction.message.edit(embed=embed)
+    
+    # 5. Notify voter
+    await interaction.response.send_message(
+        f"{'✅' if vote_type == 'yes' else '❌'} Your vote has been recorded!",
+        ephemeral=True
+    )
+    
+    # 6. Check if vote threshold reached
+    total_votes = votes_yes + votes_no
+    if total_votes >= 5:
+        approval_rate = votes_yes / total_votes
+        
+        if approval_rate >= 0.6:  # 60% approval
+            await self.cog._finalize_vote(portfolio_user_id, approved=True, ...)
+        elif (1 - approval_rate) > 0.4:  # Majority rejected
+            await self.cog._finalize_vote(portfolio_user_id, approved=False, ...)
+```
+
+### Vote Thresholds
+
+| Condition | Result |
+|-----------|--------|
+| 5+ votes AND 60%+ approve | ✅ **APPROVED** |
+| 5+ votes AND 40%+ reject | ❌ **REJECTED** |
+| < 5 votes | ⏳ Voting continues |
+
+---
+
+## Stage 5: Vote Finalization & Role Assignment
+
+### Finalize Vote Handler
+
+**File:** `src/bot/commands/parliament.py`
+
+```python
+async def _finalize_vote(self, portfolio_user_id, approved, votes_yes, votes_no, message):
+    # 1. Update portfolio status in backend
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{self.api_base_url}/api/portfolio/finalize",
+            json={
+                "portfolio_user_id": portfolio_user_id,
+                "approved": approved,
+                "votes_yes": votes_yes,
+                "votes_no": votes_no
+            }
+        ) as resp:
+            data = await resp.json()
+            new_role = data.get("new_role")
+    
+    # 2. Update embed appearance
+    embed = message.embeds[0]
+    
+    if approved:
+        embed.color = 0x00ff00  # Green
+        embed.title = "✅ Portfolio Approved - Promoted!"
+        
+        # 3. Assign Discord role
+        if new_role and new_role in ROLE_IDS:
+            guild = self.bot.get_guild(DISCORD_GUILD_ID)
+            member = await guild.fetch_member(int(portfolio_user_id))
+            role = guild.get_role(ROLE_IDS[new_role])
+            
+            await member.add_roles(role, reason=f"Parliament approved ({votes_yes}-{votes_no})")
+            
+            embed.add_field(
+                name="🎖️ Promotion",
+                value=f"**{new_role}** role assigned!",
+                inline=True
+            )
+    else:
+        embed.color = 0xff0000  # Red
+        embed.title = "❌ Portfolio Rejected"
+        embed.add_field(
+            name="⏰ Cooldown",
+            value="User can resubmit in 7 days",
+            inline=True
+        )
+    
+    # 4. Update vote count to "Final"
+    embed.set_field_at(vote_field_index,
+        name="📊 Final Vote",
+        value=f"✅ {votes_yes} / ❌ {votes_no}"
+    )
+    
+    # 5. Remove voting buttons
+    await message.edit(embed=embed, view=None)
+    
+    # 6. Notify user via DM
+    user = await self.bot.fetch_user(int(portfolio_user_id))
+    
+    if approved:
+        await user.send(
+            f"🎉 **Congratulations!** Your portfolio has been approved!\n\n"
+            f"Final Vote: ✅ {votes_yes} / ❌ {votes_no}\n\n"
+            f"🎖️ **You have been promoted to {new_role}!**"
+        )
+    else:
+        await user.send(
+            f"❌ Your portfolio was not approved.\n\n"
+            f"Final Vote: ✅ {votes_yes} / ❌ {votes_no}\n\n"
+            f"⏰ You may resubmit after **7 days**."
+        )
+```
+
+### Role IDs
+
+```python
+ROLE_IDS = {
+    "Droplet": 1445308513663324243,
+    "Current": 1444006094283477085,
+    "Founding_Droplet": 1069142027784171623,
+    "Tide": 1069140617239744572,
+    "Wave": 1068785740068159590,
+    "Tsunami": 957362763267702815,
+    "Allinliquid": 1377229341418852402,
+}
 ```
 
 ---
 
-## 🔑 Key Configuration
+## Complete Flow Diagram
 
-### Discord Channel IDs:
-- **Parliament Channel:** Defined in `PARLIAMENT_CHANNEL_ID` env variable
-- Where voting messages are posted
-
-### Role IDs (from [Portfolios.jsx](liquidweb/src/pages/Portfolios.jsx)):
-```javascript
-REVIEWER_ROLES = [
-    '1449066131741737175', // Guild Leader
-    '1447972806339067925', // Parliament
-    '1436799852171235472', // Staff
-    '1436233268134678600', // Automata
-    '1436217207825629277', // Moderator
-]
 ```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              PORTFOLIO SUBMISSION FLOW                           │
+└─────────────────────────────────────────────────────────────────────────────────┘
 
-### Timing:
-- **Voting Deadline:** 24 hours from approval
-- **Rejection Cooldown:** 7 days (defined as `RESUBMIT_COOLDOWN_DAYS`)
-
----
-
-## 🎯 Important Features
-
-### 1. **Cooldown System**
-- After rejection, user must wait 7 days to resubmit
-- Check via: `GET /api/portfolio/{discord_id}/can-resubmit`
-- Returns: `{ can_resubmit: bool, cooldown_ends: datetime, days_remaining: int }`
-
-### 2. **Portfolio Viewing**
-- Anyone can view portfolios at `/portfolios/{discord_id}`
-- Shows full portfolio with status, tweets, works, etc.
-- Different views based on status (draft, under review, voting, approved, rejected)
-
-### 3. **Tweet Integration**
-- Tweets embedded using TweetCard component
-- Tweet URLs extracted and IDs parsed
-- Stored in `portfolio_tweets` table with portfolio_id relationship
-
-### 4. **Auto-Promotion**
-- On approval, user is automatically promoted to next tier
-- Role assigned via Discord bot
-- Guild tier updated in database
-- History record created for tracking
-
-### 5. **Withdraw Option**
-- Portfolio owner can withdraw from voting
-- Button: 🗑️ on voting message
-- Sets status back to draft
-- Deletes voting message
-
----
-
-## 📍 Key Files Reference
-
-### Frontend:
-- [Portfolio.jsx](liquidweb/src/pages/Portfolio.jsx) - User portfolio creation/editing
-- [Portfolios.jsx](liquidweb/src/pages/Portfolios.jsx) - Review dashboard for curators
-- [PortfolioView.jsx](liquidweb/src/pages/PortfolioView.jsx) - Individual portfolio view
-- [AuthCallback.jsx](liquidweb/src/pages/AuthCallback.jsx) - Redirects to /portfolio after login
-
-### Backend:
-- [portfolio.py (routes)](backend/src/api/routers/portfolio.py) - All API endpoints
-- [portfolio.py (models)](backend/src/models/portfolio.py) - Database models
-- [parliament_command.py](src/bot/commands/parliament_command.py) - Discord voting bot
-
-### Config:
-- `config/roles.yaml` - Guild role tier definitions
-- Environment vars: `PARLIAMENT_CHANNEL_ID`, `FRONTEND_URL`
-
----
-
-## 🚀 API Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/portfolio/{discord_id}` | Get portfolio data |
-| POST | `/api/portfolio/save` | Save draft portfolio |
-| POST | `/api/portfolio/submit` | Submit portfolio for review |
-| POST | `/api/portfolio/review` | Curator reviews (approve/reject/changes) |
-| POST | `/api/portfolio/vote` | Parliament member votes |
-| GET | `/api/portfolio/vote-check/{discord_id}` | Check if voting is complete |
-| POST | `/api/portfolio/finalize` | Finalize voting and promote/reject |
-| DELETE | `/api/portfolio/{discord_id}` | Delete portfolio |
-| GET | `/api/portfolio/{discord_id}/can-resubmit` | Check resubmit cooldown |
-| GET | `/api/portfolio/{discord_id}/history` | Get promotion history |
-
----
-
-## 🎨 Status Display Colors
-
-```javascript
-draft:         Gray   (#64748b)
-submitted:     Blue   (#3b82f6) "Under Review"
-pending_vote:  Purple (#a855f7) "Parliament Vote"
-approved:      Green  (#22c55e) "Approved"
-promoted:      Green  (#22c55e) "Promoted"
-rejected:      Red    (#ef4444) "Rejected"
+USER                     WEBSITE                   BACKEND                 DISCORD
+────                     ───────                   ───────                 ───────
+  │                         │                         │                       │
+  │ Click "Submit"          │                         │                       │
+  │────────────────────────▶│                         │                       │
+  │                         │ POST /api/portfolio/    │                       │
+  │                         │      submit             │                       │
+  │                         │────────────────────────▶│                       │
+  │                         │                         │ status='submitted'    │
+  │                         │                         │ submitted_at=NOW()    │
+  │                         │◀────────────────────────│                       │
+  │◀────────────────────────│ "Under Review" UI      │                       │
+  │                         │                         │                       │
+  ╔═════════════════════════╪═════════════════════════╪═══════════════════════╪════╗
+  ║ GUILD LEADER REVIEW     │                         │                       │    ║
+  ╚═════════════════════════╪═════════════════════════╪═══════════════════════╪════╝
+  │                         │                         │                       │
+LEAD                        │ Click "Approve"         │                       │
+  │────────────────────────▶│                         │                       │
+  │                         │ POST /api/portfolio/    │                       │
+  │                         │      review             │                       │
+  │                         │────────────────────────▶│                       │
+  │                         │                         │ status='pending_vote' │
+  │                         │                         │                       │
+  │                         │                         │ POST Discord API      │
+  │                         │                         │ Send embed+buttons    │
+  │                         │                         │──────────────────────▶│
+  │                         │                         │                       │ 📋 Embed
+  │                         │                         │                       │ [✅][❌]
+  │                         │                         │◀──────────────────────│ msg_id
+  │                         │                         │ Store discord_msg_id  │
+  │                         │◀────────────────────────│                       │
+  │◀────────────────────────│ "Sent to Parliament"   │                       │
+  │                         │                         │                       │
+  ╔═════════════════════════╪═════════════════════════╪═══════════════════════╪════╗
+  ║ PARLIAMENT VOTING       │                         │                       │    ║
+  ╚═════════════════════════╪═════════════════════════╪═══════════════════════╪════╝
+  │                         │                         │                       │
+MEMBER                      │                         │                       │ Click ✅
+  │                         │                         │                       │────────▶
+  │                         │                         │                       │ Increment
+  │                         │                         │                       │ votes_yes
+  │                         │                         │                       │ Update embed
+  │                         │                         │                       │
+  │                         │                         │           (5+ votes, 60%+ approve)
+  │                         │                         │                       │
+  │                         │                         │◀──────────────────────│
+  │                         │                         │ POST /api/portfolio/  │
+  │                         │                         │      finalize         │
+  │                         │                         │                       │
+  │                         │                         │ status='approved'     │
+  │                         │                         │ Archive to history    │
+  │                         │                         │                       │
+  │                         │                         │──────────────────────▶│
+  │                         │                         │                       │ Assign role
+  │                         │                         │                       │ Update embed
+  │                         │                         │                       │ Remove buttons
+  │                         │                         │                       │
+USER                        │                         │                       │ Send DM
+  │◀────────────────────────────────────────────────────────────────────────────│
+  │ "🎉 Congratulations! Promoted to Current!"        │                       │
 ```
 
 ---
 
-This system provides a complete workflow from user submission to automatic promotion with Discord integration, voting mechanisms, and proper access controls.
+## Database Status Transitions
+
+```
+draft ──────────▶ submitted ──────────▶ pending_vote ──────────▶ approved/rejected
+        User submits    Lead approves        Parliament votes
+                        on website           in Discord
+```
+
+| Status | Description | Who Changes | Where |
+|--------|-------------|-------------|-------|
+| `draft` | User editing | User | Website |
+| `submitted` | Awaiting lead review | User | Website |
+| `pending_vote` | In parliament voting | Lead | Website → Discord |
+| `approved` | Passed vote | Bot | Discord |
+| `rejected` | Failed vote | Bot | Discord |
+| `promoted` | Role assigned | Bot | Discord |
+
+---
+
+## Key Files Summary
+
+| File | Purpose |
+|------|---------|
+| `web/src/app/portfolio/page.tsx` | User portfolio page (submit button) |
+| `web/src/app/portfolios/page.tsx` | Lead review page (approve/reject) |
+| `web/src/app/api/portfolio/submit/route.ts` | Submit API proxy |
+| `web/src/app/api/portfolio/review/route.ts` | Review API proxy (checks Lead role) |
+| `backend/src/api/routers/portfolio.py` | Backend portfolio endpoints |
+| `src/bot/commands/parliament.py` | Discord voting buttons & finalization |
+
+---
+
+## Environment Variables Required
+
+```env
+# Discord
+DISCORD_TOKEN=bot_token
+DISCORD_GUILD_ID=957362763267702814
+NOMINATION_CHANNEL_ID=1439139346241556480
+
+# Lead Role IDs (comma-separated)
+LEAD_ROLE_IDS=123,456,789
+
+# Role IDs for promotion
+Droplet=1445308513663324243
+Current=1444006094283477085
+Tide=1069140617239744572
+Wave=1068785740068159590
+Tsunami=957362763267702815
+Allinliquid=1377229341418852402
+
+# Backend
+BACKEND_API_URL=http://localhost:8000
+```
+
+---
+
+## Notifications to User
+
+| Event | Message | Via |
+|-------|---------|-----|
+| Submit | "Portfolio submitted for review!" | Website toast |
+| Lead Approve | (no notification) | — |
+| Lead Reject | "Portfolio rejected" | Website + DM |
+| Vote Pass | "🎉 Promoted to [Role]!" | Discord DM |
+| Vote Fail | "❌ Not approved. Resubmit in 7 days." | Discord DM |
